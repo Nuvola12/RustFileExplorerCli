@@ -15,15 +15,26 @@ use walkdir::WalkDir;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use tui::{
-    backend::CrosstermBackend, layout::{Alignment, Constraint, Direction, Layout, Margin}, style::{Color, Modifier, Style}, symbols::line::VERTICAL, text::{Span, Spans}, widgets::{
+    backend::{Backend, CrosstermBackend}, layout::{Alignment, Constraint, Direction, Layout, Margin}, style::{Color, Modifier, Style}, symbols::line::VERTICAL, text::{Span, Spans}, widgets::{
         Block, BorderType, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, Tabs,
-    }, Terminal
+    }, Terminal,Frame
 };
 
-enum FileType {
-    file,
-    directory,
+
+enum MenuItem{
+    Home,
+    Search,
 }
+
+impl From<MenuItem> for usize{
+    fn from(input: MenuItem) -> usize{
+        match input {
+            MenuItem::Home => 0,
+            MenuItem::Search => 1,
+        }
+    }
+}
+
 
 
 #[derive(Error, Debug)]
@@ -39,18 +50,46 @@ enum Event<I> {
     Tick,
 }
 
+#[derive(PartialEq)]
+enum InputMode {
+    Normal,
+    Editing,
+}
 
+/// App holds the state of the application
+struct App {
+    input: String,
+    input_mode: InputMode,
+    messages: Vec<String>,
+    current_directory: String,
+    active_menu_item: MenuItem,
+    directory_list_state: ListState,
+    selected_file: String,
+}
+
+impl Default for App {
+    fn default() -> App {
+        App {
+            input: String::new(),
+            input_mode: InputMode::Normal,
+            messages: Vec::new(),
+            current_directory: String::new(),
+            active_menu_item: MenuItem::Home,
+            directory_list_state: ListState::default(),
+            selected_file: String::new(),
+        }
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode().expect("can run in raw mode");
 
-    let mut current_directory: String = "C:/Users/XxAnd/Documents".to_string();
-    let mut selected_file: String = "".to_string();
-
-
+    let mut app = App::default();
+    app.current_directory = "C:/Users/XxAnd/Documents".to_string();
+    app.selected_file = "".to_string();
 
     let (tx, rx) = mpsc::channel();
-    let tick_rate = Duration::from_millis(200);
+    let tick_rate = Duration::from_millis(120);
 
     thread::spawn(move || {
         let mut last_tick = Instant::now();
@@ -89,16 +128,111 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let mut directory_list_state = ListState::default();
-    directory_list_state.select(Some(0));
+    app.active_menu_item = MenuItem::Home;
+    app.directory_list_state.select(Some(0));
 
     loop{
         //Main Rendering
-        let _ = terminal.draw(|rect| {
-            let size = rect.size();
+        let _ = terminal.draw(|f| draw_ui(f, &mut app));
+    
+        //Input Handeling
+        match rx.recv()? {
+            Event::Input(event) => {
+                match app.input_mode {
+                    InputMode::Normal => {
+                        // Your existing match statements for normal mode
+                        match event.code {
+                            KeyCode::Char('q') => {
+                                disable_raw_mode()?;
+                                terminal.show_cursor()?;
+                                break;
+                            }
+                    
+                            KeyCode::Down => {
+                                if let Some(selected) = app.directory_list_state.selected() {
+                                    let amount_pets = get_files_in_directory(&app.current_directory).unwrap().len();
+                    
+                                    if selected >= amount_pets -1{
+                                        app.directory_list_state.select(Some(0));
+                                    }else{
+                                        app.directory_list_state.select(Some(selected+1));
+                                    }
+                                }
+                            }
+                    
+                            KeyCode::Up => {
+                                if let Some(selected) = app.directory_list_state.selected() {
+                                    let amount_pets = get_files_in_directory(&app.current_directory).unwrap().len();
+                    
+                                    if selected > 0{
+                                        app.directory_list_state.select(Some(selected -1));
+                                    }else{
+                                        app.directory_list_state.select(Some(amount_pets -1));
+                                    }
+                                }
+                            }
+
+                            KeyCode::Char('/') => {
+                                app.active_menu_item = MenuItem::Search;
+                                app.input_mode = InputMode::Editing;
+                            }
+                    
+                            KeyCode::Backspace => {
+                                if app.current_directory != "C:/".to_string(){
+                                    let mut temp = app.current_directory.clone();
+                                    app.current_directory.clear();
+                    
+                                    temp  = match move_up_in_path(&temp){
+                                        Ok(data) => data.unwrap(),
+                                        Err(e) => panic!("error when moving up a directory"),
+                                    };
+                                    
+                                    app.current_directory.push_str(&temp);
+                                }
+                                
+                            }
+                    
+                            KeyCode::Enter =>{
+                                //panic!("Switching directory to /{}/", selected_file);
+                                update_current_directory(&app.selected_file, &mut app.current_directory)
+                            }
+                    
+                            _ => {}
+                        }
+                    }
+                    InputMode::Editing => {
+                        // Your specific handling for editing mode
+                        match event.code {
+                            KeyCode::Enter => {
+                                app.messages.push(app.input.drain(..).collect());
+                            }
+                            KeyCode::Char(c) => {
+                                app.input.push(c);
+                            }
+                            KeyCode::Backspace => {
+                                app.input.pop();
+                            }
+                            KeyCode::Esc => {
+                                app.input_mode = InputMode::Normal;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            Event::Tick => {}
+            // ... other event cases
+        }
+    }
+
+    Ok(())
+}
+
+fn draw_ui<B: Backend>(f: &mut Frame<B>, app: &mut App){
+    let size = f.size();
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .margin(0)
+                .margin(1)
                 .constraints(
                     [
                         Constraint::Length(2),
@@ -109,7 +243,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ).split(size);
 
             //Top Bar
-            let top_bar = render_directory_display(&selected_file)
+            let top_bar = render_directory_display(&app.current_directory)
                 .style(Style::default().fg(Color::LightGreen))
                 .alignment(Alignment::Left)
                 .block(
@@ -118,99 +252,59 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .style(Style::default().fg(Color::White))
                         .border_type(BorderType::Plain),
                 );
-            rect.render_widget(top_bar, chunks[0]);
-
+            f.render_widget(top_bar, chunks[0]);
+            //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            
             //Main Content
             
-            let file_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(60),
-                    Constraint::Percentage(40),
-                ].as_ref(),
-            ).split(chunks[1]);
-
-            let (left, right) = render_file_widget(&directory_list_state, &current_directory, &mut selected_file);
-
-            rect.render_stateful_widget(left, file_chunks[0], &mut directory_list_state);
-            rect.render_widget(right, file_chunks[1]);
-
-
-            //Bottom Bar
-            let bottom_bar = render_bottom_bar()
-            .style(Style::default().fg(Color::LightGreen))
-            .alignment(Alignment::Center)
-            .block(
-                Block::default()
-                    .borders(Borders::NONE)
-                    .style(Style::default().fg(Color::White))
-            );
-            rect.render_widget(bottom_bar, chunks[2])
-
-        });
-    
-        //Input Handeling
-        match rx.recv()?{
-            Event::Input(event) => match event.code {
-                KeyCode::Char('q') => {
-                    disable_raw_mode()?;
-                    terminal.show_cursor()?;
-                    break;
-                }
-
-                KeyCode::Down => {
-                    if let Some(selected) = directory_list_state.selected() {
-                        let amount_pets = get_files_in_directory(&current_directory).unwrap().len();
-
-                        if selected >= amount_pets -1{
-                            directory_list_state.select(Some(0));
-                        }else{
-                            directory_list_state.select(Some(selected+1));
-                        }
-                    }
-                }
-
-                KeyCode::Up => {
-                    if let Some(selected) = directory_list_state.selected() {
-                        let amount_pets = get_files_in_directory(&current_directory).unwrap().len();
-
-                        if selected > 0{
-                            directory_list_state.select(Some(selected -1));
-                        }else{
-                            directory_list_state.select(Some(amount_pets -1));
-                        }
-                    }
-                }
-
-                KeyCode::Backspace => {
-                    let mut temp = current_directory.clone();
-                    current_directory.clear();
-                    temp  = move_up_in_path(&temp).unwrap();
-                    current_directory.push_str(&temp);
+            match app.active_menu_item {
+                MenuItem::Home => {
+                    let file_chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Percentage(60),
+                        Constraint::Percentage(40),
+                        ].as_ref(),
+                    ).split(chunks[1]);
+                    
+                    let (left, right) = render_file_widget(&app.directory_list_state, &app.current_directory, &mut app.selected_file);
+                    
+                    f.render_stateful_widget(left, file_chunks[0], &mut app.directory_list_state);
+                    f.render_widget(right, file_chunks[1]);
+                },
+                MenuItem::Search => {
+                    let file_chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Percentage(20),
+                        Constraint::Percentage(80),
+                        ].as_ref(),
+                    ).split(chunks[1]);
+                    
+                    //let (top, bottom) = render_search_widget();
+                    let top = render_search_bar(&app);
+                    let bottom = render_search_results();
+                    
+                    f.render_widget(top, file_chunks[0]);
+                    f.render_widget(bottom, file_chunks[1]);
                     
                 }
-
-                KeyCode::Enter =>{
-                    //panic!("Switching directory to /{}/", selected_file);
-                    update_current_directory(&selected_file, &mut current_directory)
-                }
-
-                _ => {}
-            },
-            Event::Tick => {}
-        }
-    }
-
-    Ok(())
+            }
+            //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            
+            //Bottom Bar
+            let bottom_bar = render_bottom_bar();
+            f.render_widget(bottom_bar, chunks[2])
+            //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 }
 
-fn move_up_in_path(path_str: &String) -> Option<String>{
+fn move_up_in_path(path_str: &String) -> Result<Option<String>, Error>{
     let path =  Path::new(path_str);
 
-    path.parent()
+    Ok(path.parent()
         .map(|parent|
              parent.to_string_lossy()
-             .into_owned())
+             .into_owned()))
 }
 
 fn update_current_directory(selected_directory: &String, current_directory: &mut String) {
@@ -261,8 +355,6 @@ fn strip_directory(path: &String) -> String{
     path.split('/').last().unwrap().to_string()
 }
 
-
-
 fn render_directory<'a>(
     list_state: &ListState,
     directory: &String,
@@ -311,6 +403,22 @@ fn render_directory<'a>(
     Ok((list, selected_pet))
 }
 
+fn render_search_results<'a>() -> List<'a> {
+    let res = List::new(Vec::new());
+
+    res
+}
+
+fn render_search_bar<'a>( app: &'a App) -> (Paragraph<'a>){
+    let input = Paragraph::new(app.input.as_ref())
+        .style(match app.input_mode {
+            InputMode::Normal => Style::default(),
+            InputMode::Editing => Style::default().fg(Color::Yellow),
+        })
+        .block(Block::default().borders(Borders::ALL));
+
+    input
+}
 
 fn render_file_widget<'a>(directory_list_state: &ListState,current_directory: &String, selected_file: &mut String) -> (List<'a>, Paragraph<'a>){
 
@@ -336,8 +444,16 @@ fn render_directory_display<'a>( directory: &String) -> Paragraph<'a> {
 }
 
 fn render_bottom_bar<'a>() -> Paragraph<'a> {
-    Paragraph::new("pet-CLI 2024 - all rights reserved")
+    Paragraph::new("C Create    R Rename    M Move  D Delete    O Open  H Help  / Search    F Fill 🔒")
+        .style(Style::default().fg(Color::LightGreen))
+        .alignment(Alignment::Left)
+        .block(
+            Block::default()
+                .borders(Borders::NONE)
+                .style(Style::default().fg(Color::White))
+        )
 }
+
 
 fn render_details<'a>() -> Paragraph<'a> {
     let home = Paragraph::new(vec![
