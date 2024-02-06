@@ -3,15 +3,13 @@ use crossterm::{
     event::{self,  Event as CEvent, KeyCode},
     terminal::{disable_raw_mode, enable_raw_mode},
 };
-use std::fs::metadata;
-
+use std::{collections::HashMap, fs::metadata};
 use serde::{Deserialize, Serialize};
 use std::{env::current_dir, fs, path};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
-use walkdir::WalkDir;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use tui::{
@@ -21,10 +19,13 @@ use tui::{
 };
 
 
+mod filesystem;
+
+
 enum MenuItem{
     Home,
     Search,
-}
+} 
 
 impl From<MenuItem> for usize{
     fn from(input: MenuItem) -> usize{
@@ -54,17 +55,20 @@ enum Event<I> {
 enum InputMode {
     Normal,
     Editing,
+    Typing,
 }
 
 /// App holds the state of the application
 struct App {
     input: String,
     input_mode: InputMode,
-    messages: Vec<String>,
+    message: String,
     current_directory: String,
     active_menu_item: MenuItem,
     directory_list_state: ListState,
+    search_list_state: ListState,
     selected_file: String,
+    loaded_files: HashMap<String, String>,
 }
 
 impl Default for App {
@@ -72,11 +76,13 @@ impl Default for App {
         App {
             input: String::new(),
             input_mode: InputMode::Normal,
-            messages: Vec::new(),
+            message: String::new(),
             current_directory: String::new(),
             active_menu_item: MenuItem::Home,
             directory_list_state: ListState::default(),
+            search_list_state: ListState::default(),
             selected_file: String::new(),
+            loaded_files: HashMap::new(),
         }
     }
 }
@@ -85,11 +91,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode().expect("can run in raw mode");
 
     let mut app = App::default();
+
+    app.loaded_files = filesystem::fill_hashmap("C:/").unwrap();
+
     app.current_directory = "C:/Users/XxAnd/Documents".to_string();
     app.selected_file = "".to_string();
 
     let (tx, rx) = mpsc::channel();
-    let tick_rate = Duration::from_millis(120);
+    let tick_rate = Duration::from_millis(200);
 
     thread::spawn(move || {
         let mut last_tick = Instant::now();
@@ -105,12 +114,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let now = Instant::now();
                     let elapsed = now - last_key_time;
 
-                    // Only process the key if enough time has passed
                     if elapsed >= tick_rate {
-                        // Update the last key time
                         last_key_time = now;
-
-                        // Send the key event
                         tx.send(Event::Input(key)).expect("can send events");
                     }}
             }
@@ -130,6 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     app.active_menu_item = MenuItem::Home;
     app.directory_list_state.select(Some(0));
+    app.search_list_state.select(Some(0));
 
     loop{
         //Main Rendering
@@ -159,6 +165,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                             }
+
+                            KeyCode::Char('o') =>{
+                                let _ = filesystem::explorer::open_file(app.selected_file.clone());
+                            }
                     
                             KeyCode::Up => {
                                 if let Some(selected) = app.directory_list_state.selected() {
@@ -174,7 +184,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             KeyCode::Char('/') => {
                                 app.active_menu_item = MenuItem::Search;
-                                app.input_mode = InputMode::Editing;
+                                app.input_mode = InputMode::Typing;
                             }
                     
                             KeyCode::Backspace => {
@@ -200,11 +210,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             _ => {}
                         }
                     }
-                    InputMode::Editing => {
-                        // Your specific handling for editing mode
+                    InputMode::Typing => {
                         match event.code {
                             KeyCode::Enter => {
-                                app.messages.push(app.input.drain(..).collect());
+                                app.message = (app.input.drain(..).collect());
                             }
                             KeyCode::Char(c) => {
                                 app.input.push(c);
@@ -213,10 +222,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 app.input.pop();
                             }
                             KeyCode::Esc => {
+                                app.active_menu_item = MenuItem::Home;
                                 app.input_mode = InputMode::Normal;
                             }
                             _ => {}
                         }
+                    }
+                    InputMode::Editing => {
+                        match event.code {
+                            
+                            _ => {}
+                        }
+                        
                     }
                 }
             }
@@ -243,15 +260,7 @@ fn draw_ui<B: Backend>(f: &mut Frame<B>, app: &mut App){
                 ).split(size);
 
             //Top Bar
-            let top_bar = render_directory_display(&app.current_directory)
-                .style(Style::default().fg(Color::LightGreen))
-                .alignment(Alignment::Left)
-                .block(
-                    Block::default()
-                        .borders(Borders::NONE)
-                        .style(Style::default().fg(Color::White))
-                        .border_type(BorderType::Plain),
-                );
+            let top_bar = render_directory_display(&app.current_directory);
             f.render_widget(top_bar, chunks[0]);
             //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
             
@@ -283,10 +292,10 @@ fn draw_ui<B: Backend>(f: &mut Frame<B>, app: &mut App){
                     
                     //let (top, bottom) = render_search_widget();
                     let top = render_search_bar(&app);
-                    let bottom = render_search_results();
+                    let bottom = render_search_results(&app);
                     
                     f.render_widget(top, file_chunks[0]);
-                    f.render_widget(bottom, file_chunks[1]);
+                    f.render_stateful_widget(bottom, file_chunks[1], &mut app.search_list_state);
                     
                 }
             }
@@ -343,13 +352,6 @@ fn path_exists(path: &String) -> bool{
     fs::metadata(path).is_ok()
 }
 
-fn is_path_directory(path: &String) -> bool {
-
-    let md = metadata(path).unwrap();
-
-    md.is_dir()
-    
-}
 
 fn strip_directory(path: &String) -> String{
     path.split('/').last().unwrap().to_string()
@@ -403,8 +405,29 @@ fn render_directory<'a>(
     Ok((list, selected_pet))
 }
 
-fn render_search_results<'a>() -> List<'a> {
-    let res = List::new(Vec::new());
+fn render_search_results<'a>(app: &App) -> List<'a> {
+    let mut res = List::new(Vec::new());
+
+    if !String::is_empty(&app.message){
+        let search_term = app.message.clone();
+        let hash_search_results = filesystem::search_hash_map(search_term, &app.loaded_files).unwrap();
+
+        if !Vec::is_empty(&hash_search_results){
+            let items: Vec<_> = hash_search_results
+                .iter()
+                .map(|file| {
+                    let tmp = strip_directory(file);
+                    ListItem::new(Spans::from(vec![Span::styled(
+                        tmp.clone(),
+                        Style::default(),
+                    )]))
+                })
+                .collect();
+
+            res = List::new(items);
+
+        }
+    }
 
     res
 }
@@ -413,6 +436,7 @@ fn render_search_bar<'a>( app: &'a App) -> (Paragraph<'a>){
     let input = Paragraph::new(app.input.as_ref())
         .style(match app.input_mode {
             InputMode::Normal => Style::default(),
+            InputMode::Typing => Style::default(),
             InputMode::Editing => Style::default().fg(Color::Yellow),
         })
         .block(Block::default().borders(Borders::ALL));
@@ -441,15 +465,23 @@ fn render_file_widget<'a>(directory_list_state: &ListState,current_directory: &S
 
 fn render_directory_display<'a>( directory: &String) -> Paragraph<'a> {
     Paragraph::new(directory.to_string())
+    .style(Style::default().fg(Color::LightGreen))
+    .alignment(Alignment::Left)
+    .block(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .style(Style::default().fg(Color::White))
+            .border_type(BorderType::Plain),
+    )
 }
 
 fn render_bottom_bar<'a>() -> Paragraph<'a> {
-    Paragraph::new("C Create    R Rename    M Move  D Delete    O Open  H Help  / Search    F Fill 🔒")
+    Paragraph::new("D Delete    O Open  / Search")
         .style(Style::default().fg(Color::LightGreen))
         .alignment(Alignment::Left)
         .block(
             Block::default()
-                .borders(Borders::NONE)
+                .borders(Borders::TOP)
                 .style(Style::default().fg(Color::White))
         )
 }
