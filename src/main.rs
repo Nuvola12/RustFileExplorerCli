@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut app = AppInfo::App::default();
 
-    app.loaded_files = filesystem::fill_hashmap(".").unwrap(); //IMPORANT! CHANGE BACK TO DRIVE
+    app.loaded_files = filesystem::util::fill_hashmap(".").unwrap(); //IMPORANT! CHANGE BACK TO DRIVE
 
     app.current_directory = "C:/Users/XxAnd/Documents".to_string();
     app.selected_file = "".to_string();
@@ -106,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             
                             KeyCode::Up => {
                                 if let Some(selected) = app.directory_list_state.selected() {
-                                    let amount_pets = draw::get_files_in_directory(&app.current_directory).unwrap().len(); // Move to Util
+                                    let amount_pets = filesystem::util::get_files_in_directory(&app.current_directory).unwrap().len(); // Move to Util
                     
                                     if selected > 0{
                                         app.directory_list_state.select(Some(selected -1));
@@ -118,7 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             KeyCode::Down => {
                                 if let Some(selected) = app.directory_list_state.selected() {
-                                    let amount_pets = draw::get_files_in_directory(&app.current_directory).unwrap().len(); // Move to Util
+                                    let amount_pets = filesystem::util::get_files_in_directory(&app.current_directory).unwrap().len(); // Move to Util
                     
                                     if selected >= amount_pets -1{
                                         app.directory_list_state.select(Some(0));
@@ -160,13 +160,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let _ = filesystem::explorer::delete_file(&app.selected_file);
 
                             }
+
+                            KeyCode::Char('c') => {
+                                let _ = filesystem::explorer::copy_file_to_cache(&app.selected_file);
+                            }
+
+                            KeyCode::Char('v') => {
+                                let _ = match filesystem::explorer::paste_file(&app.current_directory){
+                                    Ok(data) => data,
+                                    Err(e) => panic!("Error could not paste file, Error: {}", e),
+                                };
+                            }
                     
                             KeyCode::Backspace => {
                                 if app.current_directory != "C:/".to_string(){
                                     let mut temp = app.current_directory.clone();
                                     app.current_directory.clear();
                     
-                                    temp  = match draw::move_up_in_path(&temp){ // Move to util
+                                    temp  = match filesystem::util::move_up_in_path(&temp){ 
                                         Ok(data) => data.unwrap(),
                                         Err(e) => panic!("error when moving up a directory"),
                                     };
@@ -178,7 +189,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     
                             KeyCode::Enter =>{
                                 //panic!("Switching directory to /{}/", selected_file);
-                                draw::update_current_directory(&app.selected_file, &mut app.current_directory); // Move to util
+                                filesystem::util::update_current_directory(&app.selected_file, &mut app.current_directory);
                             }
                     
                             _ => {}

@@ -2,7 +2,7 @@ use tui::{
     backend::{Backend, CrosstermBackend}, layout::{Alignment, Constraint, Direction, Layout, Margin}, style::{Color, Modifier, Style}, symbols::line::VERTICAL, text::{Span, Spans}, widgets::{
         Block, BorderType, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, Tabs,
     }, Terminal,Frame};
-use std::path::Path;
+use std::{fs::{metadata, File}, path::Path};
 use std::fs;
 
 use crate::AppInfo;
@@ -75,38 +75,6 @@ pub fn draw_ui<B: Backend>(f: &mut Frame<B>, app: &mut AppInfo::App){
             //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 }
 
-pub fn move_up_in_path(path_str: &String) -> Result<Option<String>, std::io::Error>{
-    let path =  Path::new(path_str);
-
-    Ok(path.parent()
-        .map(|parent|
-             parent.to_string_lossy()
-             .into_owned()))
-}
-
-pub fn update_current_directory(selected_directory: &String, current_directory: &mut String) {
-    current_directory.clear();
-    current_directory.push_str(&selected_directory);
-}
-pub fn get_files_in_directory(path: &String) -> Result<Vec<String>, std::io::Error> {
-    let paths: fs::ReadDir = fs::read_dir(path)?;
-
-    let mut curr_dir = Vec::new();
-
-    for path in paths {
-        let curr = path.unwrap().path();
-        let my_str = curr
-            .into_os_string()
-            .into_string()
-            .unwrap()
-            .replace("\\", "/");
-
-        curr_dir.push(my_str);
-        
-    }
-
-    Ok(curr_dir)
-}
 
 pub fn is_directory_empty(path: &String) -> bool {
     if let Ok(entries) = fs::read_dir(path) {
@@ -139,7 +107,7 @@ pub fn render_directory<'a>(app: &AppInfo::App) -> Result<(List<'a>, String), Bo
         .style(Style::default().fg(Color::White))
         .border_type(BorderType::Plain);
 
-    let curr_dir = get_files_in_directory(&app.current_directory)?;
+    let curr_dir = filesystem::util::get_files_in_directory(&app.current_directory)?;
 
     let items: Vec<_> = curr_dir
         .iter()
@@ -178,7 +146,7 @@ pub fn render_search_results<'a>(app: &AppInfo::App) -> Result<(List<'a>, String
         .border_type(BorderType::Plain);
 
     let search_term = app.message.clone();
-    let hash_search_results = filesystem::search_hash_map(search_term, &app.loaded_files).unwrap();
+    let hash_search_results = filesystem::util::search_hash_map(search_term, &app.loaded_files).unwrap();
 
     let items: Vec<_> = hash_search_results
         .iter()
@@ -222,7 +190,7 @@ pub fn render_search_results_widget<'a>(app: &mut AppInfo::App) -> (List<'a>, Pa
         app.selected_file.push_str(&selected_dir);
     }
     
-    let info_bar = render_details();
+    let info_bar = render_details(&app.selected_file).unwrap();
 
     (directory_widget, info_bar)
 }
@@ -255,7 +223,7 @@ pub fn render_file_widget<'a>(app: &mut AppInfo::App) -> (List<'a>, Paragraph<'a
     
 
 
-    let info_bar = render_details();
+    let info_bar = render_details(&app.selected_file).unwrap();
 
     (directory_widget, info_bar)
 }
@@ -273,7 +241,7 @@ pub fn render_directory_display<'a>( directory: &String) -> Paragraph<'a> {
 }
 
 pub fn render_bottom_bar<'a>() -> Paragraph<'a> {
-    Paragraph::new("N Create    C Copy  X Cut   V Paste   R Rename  D Delete    O Open / Search 🔒")
+    Paragraph::new("N Create    C Copy  X Cut   V Paste   R Rename  D Delete    O Open / Search ")
         .style(Style::default().fg(Color::LightGreen))
         .alignment(Alignment::Left)
         .block(
@@ -284,15 +252,31 @@ pub fn render_bottom_bar<'a>() -> Paragraph<'a> {
 }
 
 
-pub fn render_details<'a>() -> Paragraph<'a> {
+pub fn render_details<'a>(path: &String) -> Result<Paragraph<'a>, Box<dyn std::error::Error>>{
+    let md   = metadata(path).unwrap();
+
+    let file_name = filesystem::util::file_name(path).unwrap();
+    let file_type = filesystem::util::is_path_file(&md).unwrap();
+    let file_size = filesystem::util::get_size_in_mb(&md).unwrap();
+    let file_modify_time = filesystem::util::last_modified_time(&md).unwrap();
+
+    let file_name_string = format!("File Name: {}",file_name);
+    let file_type_string = format!("File Type: {}",file_type);
+    let file_size_string = format!("File Size: {}MB",file_size);
+    let file_modify_time_string = format!("Last Time Modified: {}",file_modify_time);
+
     let home = Paragraph::new(vec![
         Spans::from(vec![Span::raw("")]),
-        Spans::from(vec![Span::raw("Welcome")]),
+        Spans::from(vec![Span::raw(file_name_string)]),
         Spans::from(vec![Span::raw("")]),
-        Spans::from(vec![Span::raw("to")]),
+        Spans::from(vec![Span::raw(file_type_string)]),
+        Spans::from(vec![Span::raw("")]),
+        Spans::from(vec![Span::raw(file_size_string)]),
+        Spans::from(vec![Span::raw("")]),
+        Spans::from(vec![Span::raw(file_modify_time_string)]),
         Spans::from(vec![Span::raw("")]),
         Spans::from(vec![Span::styled(
-            "pet-CLI",
+            "Rust-CLI FileExplorer",
             Style::default().fg(Color::LightBlue),
         )]),
         Spans::from(vec![Span::raw("")]),
@@ -300,5 +284,5 @@ pub fn render_details<'a>() -> Paragraph<'a> {
         .alignment(Alignment::Center)
         .block(
             Block::default());
-        home
+        Ok(home)
 }

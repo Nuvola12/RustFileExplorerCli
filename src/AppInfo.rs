@@ -1,10 +1,6 @@
-use std::{collections::HashMap, fs::metadata};
+use std::collections::HashMap;
 
-use tui::{
-    backend::{Backend, CrosstermBackend}, layout::{Alignment, Constraint, Direction, Layout, Margin}, style::{Color, Modifier, Style}, symbols::line::VERTICAL, text::{Span, Spans}, widgets::{
-        Block, BorderType, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table, Tabs,
-    }, Terminal,Frame
-};
+use tui::widgets::ListState;
 
 #[derive(PartialEq)]
 pub enum InputMode {
@@ -41,30 +37,30 @@ impl From<MenuItem> for usize{
 
 pub struct App {
     pub input: String,
-    pub input_mode: InputMode,
     pub message: String,
+    pub selected_file: String,
     pub current_directory: String,
+    pub input_type: InputType,
+    pub input_mode: InputMode,
     pub active_menu_item: MenuItem,
     pub directory_list_state: ListState,
     pub search_list_state: ListState,
-    pub selected_file: String,
     pub loaded_files: HashMap<String, String>,
-    pub input_type: InputType,
 }
 
 impl Default for App {
     fn default() -> App {
         App {
             input: String::new(),
-            input_mode: InputMode::Normal,
             message: String::new(),
+            selected_file: String::new(),
             current_directory: String::new(),
+            input_type: InputType::None,
+            input_mode: InputMode::Normal,
             active_menu_item: MenuItem::Home,
             directory_list_state: ListState::default(),
             search_list_state: ListState::default(),
-            selected_file: String::new(),
             loaded_files: HashMap::new(),
-            input_type: InputType::None,
         }
     }
 }
